@@ -27,7 +27,7 @@ jobs:
       - name: Add PassWall2 feed
         run: |
           cd openwrt
-          echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
+          echo 'src-git passwall2 git://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
