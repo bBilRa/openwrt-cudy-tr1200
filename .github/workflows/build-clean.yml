@@ -1,67 +1,66 @@
-name: Build OpenWRT
+name: Build OpenWRT with Passwall2
 
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'OpenWRT branch'
+        required: true
+        default: 'v23.05.3'
+        type: string
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    
     steps:
-    - name: Checkout
-      uses: actions/checkout@v3
-
-    - name: Install dependencies
+    - name: Install build dependencies
       run: |
         sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk \
         gcc-multilib g++-multilib gettext git libncurses-dev libssl-dev \
         python3-distutils rsync unzip zlib1g-dev file wget
 
+    - name: Configure Git
+      run: |
+        git config --global http.sslBackend "openssl"
+        git config --global http.lowSpeedLimit 0
+        git config --global http.lowSpeedTime 999999
+        git config --global --unset http.proxy || true
+        git config --global --unset https.proxy || true
+
     - name: Clone OpenWRT
       run: |
-        git clone https://git.openwrt.org/openwrt/openwrt.git openwrt
+        git clone --depth 1 https://git.openwrt.org/openwrt/openwrt.git openwrt
         cd openwrt
-        git checkout v23.05.2  # или нужная версия
+        git fetch --depth 1 origin ${{ github.event.inputs.branch }}
+        git checkout ${{ github.event.inputs.branch }}
 
     - name: Configure feeds
       run: |
         cd openwrt
-        # Используем только стабильные фиды
         cat > feeds.conf << 'EOF'
         src-git packages https://git.openwrt.org/feed/packages.git
         src-git luci https://git.openwrt.org/project/luci.git
         src-git routing https://git.openwrt.org/feed/routing.git
         src-git telephony https://git.openwrt.org/feed/telephony.git
+        src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git
         EOF
 
     - name: Update feeds
       run: |
         cd openwrt
-        ./scripts/feeds update -a
+        timeout 600s ./scripts/feeds update -a
         ./scripts/feeds install -a
-
-    - name: Add custom feeds (optional)
-      run: |
-        cd openwrt
-        # Добавляем passwall2 через ретраи
-        for i in 1 2 3; do
-          echo "Попытка $i добавить passwall2..."
-          echo "src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git" >> feeds.conf
-          if ./scripts/feeds update passwall2; then
-            ./scripts/feeds install -a -p passwall2
-            break
-          else
-            echo "Не удалось, удаляем строку и пробуем снова"
-            sed -i '/passwall2/d' feeds.conf
-            sleep 10
-          fi
-        done
 
     - name: Generate config
       run: |
         cd openwrt
         echo 'CONFIG_TARGET_x86_64=y' > .config
         echo 'CONFIG_TARGET_x86_64_Generic=y' >> .config
+        echo 'CONFIG_TARGET_ROOTFS_EXT4FS=y' >> .config
+        echo 'CONFIG_PACKAGE_luci=y' >> .config
+        echo 'CONFIG_PACKAGE_luci-app-passwall2=y' >> .config
         make defconfig
 
     - name: Download sources
@@ -73,10 +72,11 @@ jobs:
     - name: Build
       run: |
         cd openwrt
-        make -j$(nproc)
+        make -j$(nproc) V=s
 
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+    - name: Upload firmware
+      uses: actions/upload-artifact@v4
       with:
         name: openwrt-firmware
         path: openwrt/bin/targets/
+        retention-days: 30
