@@ -1,0 +1,127 @@
+name: Build OpenWrt for Cudy TR1200 v1 (Clean)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Clean workspace
+        run: |
+          sudo rm -rf "$GITHUB_WORKSPACE"
+          mkdir -p "$GITHUB_WORKSPACE"
+
+      - name: Checkout OpenWrt
+        run: |
+          git clone https://github.com/openwrt/openwrt.git
+          cd openwrt
+          git checkout v23.05.4
+
+      - name: Update feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Add PassWall2 feed
+        run: |
+          cd openwrt
+          echo 'src-git passwall2 https://github.com/xiaorouji/openwrt-passwall2.git' >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Generate .config
+        run: |
+          cd openwrt
+          cat > .config << 'EOF'
+          CONFIG_TARGET_ramips=y
+          CONFIG_TARGET_ramips_mt76x8=y
+          CONFIG_TARGET_ramips_mt76x8_DEVICE_cudy_tr1200-v1=y
+          CONFIG_TARGET_ROOTFS_SQUASHFS=y
+
+          # Базовые пакеты
+          CONFIG_PACKAGE_base-files=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_dropbear=y
+          CONFIG_PACKAGE_firewall4=y
+          CONFIG_PACKAGE_fstools=y
+          CONFIG_PACKAGE_kmod-gpio-button-hotplug=y
+          CONFIG_PACKAGE_kmod-leds-gpio=y
+          CONFIG_PACKAGE_kmod-mt7603=y
+          CONFIG_PACKAGE_kmod-mt7615e=y
+          CONFIG_PACKAGE_kmod-mt7663-firmware-ap=y
+          CONFIG_PACKAGE_kmod-nft-offload=y
+          CONFIG_PACKAGE_kmod-usb2=y
+          CONFIG_PACKAGE_kmod-usb-ohci=y
+          CONFIG_PACKAGE_kmod-usb-ledtrig-usbport=y
+          CONFIG_PACKAGE_kmod-usb-net=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-serial=y
+          CONFIG_PACKAGE_kmod-usb-serial-option=y
+          CONFIG_PACKAGE_libc=y
+          CONFIG_PACKAGE_libgcc=y
+          CONFIG_PACKAGE_libustream-mbedtls=y
+          CONFIG_PACKAGE_logd=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_mtd=y
+          CONFIG_PACKAGE_netifd=y
+          CONFIG_PACKAGE_nftables=y
+          CONFIG_PACKAGE_odhcp6c=y
+          CONFIG_PACKAGE_odhcpd-ipv6only=y
+          CONFIG_PACKAGE_uci=y
+          CONFIG_PACKAGE_uclient-fetch=y
+          CONFIG_PACKAGE_urandom-seed=y
+          CONFIG_PACKAGE_urngd=y
+
+          # Замены
+          CONFIG_PACKAGE_wpad-openssl=y
+          CONFIG_PACKAGE_dnsmasq-full=y
+
+          # USB-модем
+          CONFIG_PACKAGE_comgt=y
+
+          # PassWall2 + Xray
+          CONFIG_PACKAGE_luci-app-passwall2=y
+          CONFIG_PACKAGE_xray-core=y
+
+          # Отключаем лишнее
+          CONFIG_PACKAGE_ppp=n
+          CONFIG_PACKAGE_ppp-mod-pppoe=n
+          CONFIG_PACKAGE_swconfig=n
+          CONFIG_PACKAGE_luci-app-attendedsysupgrade=n
+          CONFIG_PACKAGE_apk-mbedtls=n
+          CONFIG_PACKAGE_rpcd-mod-luci=n
+          CONFIG_PACKAGE_luci-mod-rpc=n
+          EOF
+
+          echo "CONFIG_DEVEL=y" >> .config
+          echo "CONFIG_AUTOREBUILD=y" >> .config
+          echo "CONFIG_BUILD_SUFFIX=-cudy-vless" >> .config
+          make defconfig
+
+      - name: Download sources with timeout
+        run: |
+          cd openwrt
+          timeout 300 make download -j1 || true
+          sleep 5
+          make download -j1
+
+      - name: Build firmware
+        run: |
+          cd openwrt
+          make -j1 V=s 2>&1 | tee build.log
+
+      - name: Upload firmware
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-cudy-tr1200-v1-passwall2
+          path: openwrt/bin/targets/ramips/mt76x8/*.bin
+
+      - name: Upload build log if failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: openwrt/build.log
